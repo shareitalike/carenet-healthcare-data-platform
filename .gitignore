@@ -1,0 +1,93 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTest / Unit Tests Cache
+.pytest_cache/
+.tox/
+.nosenv/
+.htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+htmlcov/
+
+# Environments (Virtualenvs)
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Local Secrets & Credentials
+*secret*.json
+*.pem
+*.key
+*.p12
+credentials.json
+.gcp/
+.aws/
+*creds*
+.env*
+
+# IDEs & System Files
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs & Temp Data
+logs/
+*.log
+temp/
+tmp/
+checkpoint/
+/scratch/
+step_*.txt
+master_prompt_*.txt
+past_parts.txt
+
+# Private Study & Interview Guides (Do not upload to Git)
+GCP_HEALTHCARE_*.md
+GCP_DEPLOYMENT_GUIDE.md
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+terraform.tfvars

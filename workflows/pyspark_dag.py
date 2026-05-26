@@ -75,19 +75,27 @@ PYSPARK_JOB_4 = {
 CLUSTER_CONFIG = {
     "master_config": {
         "num_instances": 1,
-        "machine_type_uri": "n1-standard-4",
+        "machine_type_uri": "n1-standard-1",
         "disk_config": {"boot_disk_type": "pd-standard", "boot_disk_size_gb": 100},
     },
     "worker_config": {
         "num_instances": 2,
-        "machine_type_uri": "n1-standard-4",
+        "machine_type_uri": "n1-standard-1",
         "disk_config": {"boot_disk_type": "pd-standard", "boot_disk_size_gb": 100},
     },
     "secondary_worker_config": {
-        "num_instances": 2,
-        "machine_type_uri": "n1-standard-4",
-        "is_preemptible": True,  # Preemptible (Spot) VMs for 80% cost savings
+        "num_instances": 0,
+        "machine_type_uri": "n1-standard-1",
+        "is_preemptible": True,
         "disk_config": {"boot_disk_type": "pd-standard", "boot_disk_size_gb": 100},
+    },
+    "gce_cluster_config": {
+        "zone_uri": "us-central1-a"
+    },
+    "software_config": {
+        "properties": {
+            "dataproc:pip.packages": "google-cloud-secret-manager==2.22.0"
+        }
     }
 }
 

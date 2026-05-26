@@ -1,6 +1,6 @@
 from airflow import DAG
 from datetime import timedelta, datetime
-from airflow.operators.dagrun_operator import TriggerDagRunOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 # Define default arguments
 ARGS = {

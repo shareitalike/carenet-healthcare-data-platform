@@ -53,6 +53,9 @@ venv.bak/
 *.key
 *.p12
 credentials.json
+gcp-key.json
+**/gcp-key.json
+local_airflow/include/gcp-key.json
 .gcp/
 .aws/
 *creds*

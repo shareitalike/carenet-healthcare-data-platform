@@ -15,8 +15,8 @@ REGION = "us-central1"
 CLUSTER_NAME = "carenet-dataproc-cluster-{{ ds_nodash }}"
 COMPOSER_BUCKET = Variable.get("gcs_bucket", "carenet-rcm-data-bucket")
 
-GCS_JOB_FILE_1 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/hospitalA_mysqlToLanding.py"
-GCS_JOB_FILE_2 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/hospitalB_mysqlToLanding.py"
+GCS_JOB_FILE_1 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/epic_clarity_to_landing.py"
+GCS_JOB_FILE_2 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/cerner_millennium_to_landing.py"
 GCS_JOB_FILE_3 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/claims.py"
 GCS_JOB_FILE_4 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/cpt_codes.py"
 

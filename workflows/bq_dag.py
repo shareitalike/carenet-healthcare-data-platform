@@ -19,7 +19,7 @@ def read_sql_file(file_path):
     with open(file_path, "r") as file:
         query = file.read()
     # Dynamically replace project and bucket strings
-    query = query.replace("avd-databricks-demo", PROJECT_ID)
+    query = query.replace("carenet-rcm-data-platform", PROJECT_ID)
     query = query.replace("healthcare-bucket-22032025", COMPOSER_BUCKET)
     return query
 

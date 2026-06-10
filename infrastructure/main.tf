@@ -71,13 +71,13 @@ resource "google_sql_database_instance" "mysql_instance" {
   deletion_protection = false
 }
 
-resource "google_sql_database" "hospital_a_db" {
-  name     = "hospital_a_db"
+resource "google_sql_database" "epic_clarity_db" {
+  name     = "epic_clarity_db"
   instance = google_sql_database_instance.mysql_instance.name
 }
 
-resource "google_sql_database" "hospital_b_db" {
-  name     = "hospital_b_db"
+resource "google_sql_database" "cerner_millennium_db" {
+  name     = "cerner_millennium_db"
   instance = google_sql_database_instance.mysql_instance.name
 }
 
@@ -102,7 +102,7 @@ resource "google_secret_manager_secret_version" "db_secret_version" {
     username = google_sql_user.db_user.name
     password = google_sql_user.db_user.password
     host     = google_sql_database_instance.mysql_instance.public_ip_address
-    database = google_sql_database.hospital_a_db.name
+    database = google_sql_database.epic_clarity_db.name
   })
 }
 
@@ -114,15 +114,93 @@ resource "google_bigquery_dataset" "temp_dataset" {
   depends_on  = [google_project_service.gcp_services]
 }
 
-# 6. Pub/Sub for Streaming
-resource "google_pubsub_topic" "transactions_topic" {
-  name       = "carenet-rcm-transactions-topic"
+# 6. Pub/Sub for Streaming (Domain-Specific Topics)
+# Enterprise Architecture: Each clinical domain has its own topic
+# for independent scaling, monitoring, and error handling.
+
+# 6a. ADT Topic (Admit/Discharge/Transfer - HL7v2 ADT equivalent)
+resource "google_pubsub_topic" "topic_adt" {
+  name       = "carenet-rcm-topic-adt"
   depends_on = [google_project_service.gcp_services]
 }
 
-resource "google_pubsub_subscription" "transactions_sub" {
-  name  = "carenet-rcm-transactions-sub"
-  topic = google_pubsub_topic.transactions_topic.name
+resource "google_pubsub_subscription" "sub_adt" {
+  name  = "carenet-rcm-sub-adt"
+  topic = google_pubsub_topic.topic_adt.name
+
+  # Enable message ordering for FIFO guarantees per patient
+  enable_message_ordering = true
+
+  # Retry policy for transient failures
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+
+  # Dead letter policy: after 5 failed delivery attempts, send to DLQ topic
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.topic_dlq.id
+    max_delivery_attempts = 5
+  }
+}
+
+# 6b. Claims Topic (837/835 transaction equivalent)
+resource "google_pubsub_topic" "topic_claims" {
+  name       = "carenet-rcm-topic-claims"
+  depends_on = [google_project_service.gcp_services]
+}
+
+resource "google_pubsub_subscription" "sub_claims" {
+  name  = "carenet-rcm-sub-claims"
+  topic = google_pubsub_topic.topic_claims.name
+
+  enable_message_ordering = true
+
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.topic_dlq.id
+    max_delivery_attempts = 5
+  }
+}
+
+# 6c. Orders Topic (ORM/ORU - Lab/Pharmacy Orders)
+resource "google_pubsub_topic" "topic_orders" {
+  name       = "carenet-rcm-topic-orders"
+  depends_on = [google_project_service.gcp_services]
+}
+
+resource "google_pubsub_subscription" "sub_orders" {
+  name  = "carenet-rcm-sub-orders"
+  topic = google_pubsub_topic.topic_orders.name
+
+  enable_message_ordering = true
+
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "600s"
+  }
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.topic_dlq.id
+    max_delivery_attempts = 5
+  }
+}
+
+# 6d. Infrastructure-Level Dead Letter Queue Topic
+# Messages that fail delivery after max_delivery_attempts land here
+# for manual inspection and replay by the Data Engineering team.
+resource "google_pubsub_topic" "topic_dlq" {
+  name       = "carenet-rcm-topic-dead-letter-queue"
+  depends_on = [google_project_service.gcp_services]
+}
+
+resource "google_pubsub_subscription" "sub_dlq" {
+  name  = "carenet-rcm-sub-dead-letter-queue"
+  topic = google_pubsub_topic.topic_dlq.name
 }
 
 # 7. Cloud Composer (Airflow)

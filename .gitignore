@@ -94,3 +94,6 @@ GCP_DEPLOYMENT_GUIDE.md
 *.tfstate.backup
 .terraform.lock.hcl
 terraform.tfvars
+
+# Snapshots
+.snapshots/

@@ -53,7 +53,8 @@ claims.csv (FTP Payer) ─┘                                     │
 
 ## 4. Repository Structure
 
-* [workflows/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/workflows/): Airflow DAGs orchestrating Dataproc creation, PySpark runs, and BigQuery SQL runs.
+* [workflows/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/workflows/): Production Apache Airflow DAGs built for deployment to **GCP Cloud Composer**. Orchestrates Dataproc creation, PySpark runs, and BigQuery SQL runs.
+* [local_airflow/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/local_airflow/): Dockerized local Airflow environment used exclusively for zero-cost local DAG development and testing before pushing to Cloud Composer.
 * [data/INGESTION/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/INGESTION/): PySpark batch extraction scripts for EMR and ICD/CPT reference datasets.
 * [data/STREAMING/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/STREAMING/): Streaming event generator and consumers (in both **Spark Structured Streaming** and **Apache Beam/Dataflow**).
 * [data/BQ/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/BQ/): BigQuery SQL transformations for Bronze/Silver/Gold layouts, and real-time streaming views.

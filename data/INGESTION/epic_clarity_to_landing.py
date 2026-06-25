@@ -18,11 +18,11 @@ storage_client = storage.Client()
 bq_client = bigquery.Client()
 
 # Initialize Spark Session
-spark = SparkSession.builder.appName("HospitalAMySQLToLanding").getOrCreate()
+spark = SparkSession.builder.appName("EpicClarityMySQLToLanding").getOrCreate()
 
 # Google Cloud Storage (GCS) Configuration
 GCS_BUCKET = args.bucket
-HOSPITAL_NAME = "hospital-a"
+HOSPITAL_NAME = "epic-clarity"
 LANDING_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/"
 ARCHIVE_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/archive/"
 CONFIG_FILE_PATH = f"gs://{GCS_BUCKET}/configs/load_config.csv"
@@ -60,7 +60,7 @@ else:
 
 # MySQL Configuration
 MYSQL_CONFIG = {
-    "url": f"jdbc:mysql://{db_host}:3306/hospital_a_db?useSSL=false&allowPublicKeyRetrieval=true",
+    "url": f"jdbc:mysql://{db_host}:3306/epic_clarity_db?useSSL=false&allowPublicKeyRetrieval=true",
     "driver": "com.mysql.cj.jdbc.Driver",
     "user": db_user,
     "password": db_pass
@@ -112,7 +112,7 @@ def save_logs_to_bigquery():
 # Function to Move Existing Files to Archive
 def move_existing_files_to_archive(table):
     blobs = list(storage_client.bucket(GCS_BUCKET).list_blobs(prefix=f"landing/{HOSPITAL_NAME}/{table}/"))
-    existing_files = [blob.name for blob in blobs if blob.name.endswith(".json")]
+    existing_files = [blob.name for blob in blobs if blob.name.endswith(".parquet")]
 
     if not existing_files:
         log_event("INFO", f"No existing files for table {table}")
@@ -121,9 +121,16 @@ def move_existing_files_to_archive(table):
     for file in existing_files:
         source_blob = storage_client.bucket(GCS_BUCKET).blob(file)
 
-        # Extract Date from File Name
-        date_part = file.split("_")[-1].split(".")[0]
-        year, month, day = date_part[-4:], date_part[2:4], date_part[:2]
+        # Extract Date from File Name (from folder structure like table_YYYYMMDD)
+        folder_name = file.split("/")[-2]
+        date_part = folder_name.split("_")[-1]
+        
+        # If it's 8 digits YYYYMMDD
+        if len(date_part) == 8 and date_part.isdigit():
+            year, month, day = date_part[:4], date_part[4:6], date_part[6:8]
+        else:
+            # Fallback
+            year, month, day = date_part[-4:], date_part[2:4], date_part[:2]
 
         # Move to Archive
         archive_path = f"landing/{HOSPITAL_NAME}/archive/{table}/{year}/{month}/{day}/{file.split('/')[-1]}"
@@ -142,7 +149,7 @@ def get_latest_watermark(table_name):
         query = f"""
             SELECT MAX(load_timestamp) AS latest_timestamp
             FROM `{BQ_AUDIT_TABLE}`
-            WHERE tablename = '{table_name}' and data_source = "hospital_a_db"
+            WHERE tablename = '{table_name}' and data_source = "epic_clarity_db"
         """
         query_job = bq_client.query(query)
         result = query_job.result()
@@ -243,7 +250,7 @@ def extract_and_save_to_landing(table, load_type, watermark_col):
         
         # Insert Audit Entry
         audit_df = spark.createDataFrame([
-            ("hospital_a_db", table, load_type, df.count(), datetime.datetime.now(), "SUCCESS")], 
+            ("epic_clarity_db", table, load_type, df.count(), datetime.datetime.now(), "SUCCESS")], 
             ["data_source", "tablename", "load_type", "record_count", "load_timestamp", "status"])
 
         (audit_df.write.format("bigquery")
@@ -268,7 +275,7 @@ def read_config_file():
 config_df = read_config_file()
 
 for row in config_df.collect():
-    if row["is_active"] == '1' and row["datasource"] == "hospital_a_db": 
+    if row["is_active"] == '1' and row["datasource"] == "epic_clarity_db": 
         db, src, table, load_type, watermark, _, targetpath = row
         move_existing_files_to_archive(table)
         extract_and_save_to_landing(table, load_type, watermark)

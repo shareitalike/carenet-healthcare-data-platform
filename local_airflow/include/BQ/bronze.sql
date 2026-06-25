@@ -1,66 +1,66 @@
 -- Description: Create external tables for bronze dataset in BigQuery
 -- please do not forget to replace the bucket path
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.departments_ha` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.departments_ha` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-a/departments/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/epic-clarity/departments/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.encounters_ha` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.encounters_ha` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-a/encounters/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/epic-clarity/encounters/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.patients_ha` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.patients_ha` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-a/patients/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/epic-clarity/patients/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.providers_ha` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.providers_ha` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-a/providers/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/epic-clarity/providers/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.transactions_ha` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.transactions_ha` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-a/transactions/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/epic-clarity/transactions/*.parquet']
 );
 
 ---------------------------------------------------------------------------------------------------------------------------
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.departments_hb` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.departments_hb` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-b/departments/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/cerner-millennium/departments/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.encounters_hb` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.encounters_hb` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-b/encounters/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/cerner-millennium/encounters/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.patients_hb` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.patients_hb` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-b/patients/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/cerner-millennium/patients/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.providers_hb` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.providers_hb` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-b/providers/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/cerner-millennium/providers/*.parquet']
 );
 
-CREATE EXTERNAL TABLE IF NOT EXISTS `avd-databricks-demo.bronze_dataset.transactions_hb` 
+CREATE EXTERNAL TABLE IF NOT EXISTS `carenet-rcm-data-platform.bronze_dataset.transactions_hb` 
 OPTIONS (
-  format = 'JSON',
-  uris = ['gs://healthcare-bucket-22032025/landing/hospital-b/transactions/*.json']
+  format = 'PARQUET',
+  uris = ['gs://healthcare-bucket-22032025/landing/cerner-millennium/transactions/*.parquet']
 );
 
 ---------------------------------------------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 -- IN THIS WE WE WILL IMPLEMENTING BOTH SCD2 AND CDM LOGIC FOR THE SILVER TABLES
 
 -- 1. Create table departments by Merge Data from Hospital A & B  
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.departments` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.departments` (
     Dept_Id STRING,
     SRC_Dept_Id STRING,
     Name STRING,
@@ -11,10 +11,10 @@ CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.departments` (
 CLUSTER BY datasource;
 
 -- 2. Truncate Silver Table Before Inserting 
-TRUNCATE TABLE `avd-databricks-demo.silver_dataset.departments`;
+TRUNCATE TABLE `carenet-rcm-data-platform.silver_dataset.departments`;
 
 -- 3. full load by Inserting merged Data 
-INSERT INTO `avd-databricks-demo.silver_dataset.departments`
+INSERT INTO `carenet-rcm-data-platform.silver_dataset.departments`
 SELECT DISTINCT 
     CONCAT(deptid, '-', datasource) AS Dept_Id,
     deptid AS SRC_Dept_Id,
@@ -25,31 +25,34 @@ SELECT DISTINCT
         ELSE FALSE 
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `avd-databricks-demo.bronze_dataset.departments_ha`
+    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `avd-databricks-demo.bronze_dataset.departments_hb`
+    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_hb`
 );
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create table providers by Merge Data from Hospital A & B  
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.providers` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.providers` (
     ProviderID STRING,
     FirstName STRING,
     LastName STRING,
     Specialization STRING,
     DeptID STRING,
     NPI INT64,
+    DEA_Number STRING,
+    Taxonomy_Code STRING,
+    State_License_Number STRING,
     datasource STRING,
     is_quarantined BOOLEAN
 )
 CLUSTER BY datasource, Specialization;
 
 -- 2. Truncate Silver Table Before Inserting 
-TRUNCATE TABLE `avd-databricks-demo.silver_dataset.providers`;
+TRUNCATE TABLE `carenet-rcm-data-platform.silver_dataset.providers`;
 
 -- 3. full load by Inserting merged Data 
-INSERT INTO `avd-databricks-demo.silver_dataset.providers`
+INSERT INTO `carenet-rcm-data-platform.silver_dataset.providers`
 SELECT DISTINCT 
     ProviderID,
     FirstName,
@@ -57,31 +60,39 @@ SELECT DISTINCT
     Specialization,
     DeptID,
     CAST(NPI AS INT64) AS NPI,
+    'UNKNOWN_DEA' AS DEA_Number,
+    'UNKNOWN_TAXONOMY' AS Taxonomy_Code,
+    'UNKNOWN_LICENSE' AS State_License_Number,
     datasource,
     CASE 
         WHEN ProviderID IS NULL OR DeptID IS NULL THEN TRUE 
         ELSE FALSE 
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `avd-databricks-demo.bronze_dataset.providers_ha`
+    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `avd-databricks-demo.bronze_dataset.providers_hb`
+    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_hb`
 );
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create patients Table in BigQuery
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.patients` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.patients` (
     Patient_Key STRING,
     SRC_PatientID STRING,
+    MRN STRING,
     FirstName STRING,
     LastName STRING,
     MiddleName STRING,
-    SSN STRING,
+    SSN_Hash STRING,
     PhoneNumber STRING,
     Gender STRING,
     DOB DATE,
     Address STRING,
+    Race STRING,
+    Ethnicity STRING,
+    Language_Preference STRING,
+    MaritalStatus STRING,
     SRC_ModifiedDate INT64,
     datasource STRING,
     is_quarantined BOOL,
@@ -92,18 +103,23 @@ CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.patients` (
 CLUSTER BY datasource, is_current;
 
 --Create a quality_checks temp table
-CREATE OR REPLACE TABLE `avd-databricks-demo.silver_dataset.quality_checks` AS
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks` AS
 SELECT DISTINCT 
     CONCAT(SRC_PatientID, '-', datasource) AS Patient_Key,
     SRC_PatientID,
+    CONCAT('MRN-', SRC_PatientID) AS MRN,
     FirstName,
     LastName,
     MiddleName,
-    SSN,
+    TO_HEX(SHA256(SSN)) AS SSN_Hash,
     PhoneNumber,
     Gender,
     SAFE.PARSE_DATE('%Y%m%d', CAST(DOB AS STRING)) AS DOB,
     Address,
+    'Unknown' AS Race,
+    'Unknown' AS Ethnicity,
+    'English' AS Language_Preference,
+    'Unknown' AS MaritalStatus,
     ModifiedDate AS SRC_ModifiedDate,
     datasource,
     CASE 
@@ -123,7 +139,7 @@ FROM (
         Address,
         ModifiedDate,
         'hosa' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.patients_ha`
+    FROM `carenet-rcm-data-platform.bronze_dataset.patients_ha`
     
     UNION ALL
     
@@ -139,26 +155,31 @@ FROM (
         Address,
         ModifiedDate,
         'hosb' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.patients_hb`
+    FROM `carenet-rcm-data-platform.bronze_dataset.patients_hb`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
-MERGE INTO `avd-databricks-demo.silver_dataset.patients` AS target
-USING `avd-databricks-demo.silver_dataset.quality_checks` AS source
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.patients` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks` AS source
 ON target.Patient_Key = source.Patient_Key
 AND target.is_current = TRUE 
 
 -- Step 1: Mark existing records as historical if any column has changed
 WHEN MATCHED AND (
     target.SRC_PatientID <> source.SRC_PatientID OR
+    target.MRN <> source.MRN OR
     target.FirstName <> source.FirstName OR
     target.LastName <> source.LastName OR
     target.MiddleName <> source.MiddleName OR
-    target.SSN <> source.SSN OR
+    target.SSN_Hash <> source.SSN_Hash OR
     target.PhoneNumber <> source.PhoneNumber OR
     target.Gender <> source.Gender OR
     target.DOB <> source.DOB OR
     target.Address <> source.Address OR
+    target.Race <> source.Race OR
+    target.Ethnicity <> source.Ethnicity OR
+    target.Language_Preference <> source.Language_Preference OR
+    target.MaritalStatus <> source.MaritalStatus OR
     target.SRC_ModifiedDate <> source.SRC_ModifiedDate OR
     target.datasource <> source.datasource OR
     target.is_quarantined <> source.is_quarantined
@@ -172,14 +193,19 @@ WHEN NOT MATCHED
 THEN INSERT (
     Patient_Key,
     SRC_PatientID,
+    MRN,
     FirstName,
     LastName,
     MiddleName,
-    SSN,
+    SSN_Hash,
     PhoneNumber,
     Gender,
     DOB,
     Address,
+    Race,
+    Ethnicity,
+    Language_Preference,
+    MaritalStatus,
     SRC_ModifiedDate,
     datasource,
     is_quarantined,
@@ -190,14 +216,19 @@ THEN INSERT (
 VALUES (
     source.Patient_Key,
     source.SRC_PatientID,
+    source.MRN,
     source.FirstName,
     source.LastName,
     source.MiddleName,
-    source.SSN,
+    source.SSN_Hash,
     source.PhoneNumber,
     source.Gender,
     source.DOB,
     source.Address,
+    source.Race,
+    source.Ethnicity,
+    source.Language_Preference,
+    source.MaritalStatus,
     source.SRC_ModifiedDate,
     source.datasource,
     source.is_quarantined,
@@ -207,12 +238,12 @@ VALUES (
 );
 
 -- DROP quality_check table
-DROP TABLE IF EXISTS `avd-databricks-demo.silver_dataset.quality_checks`;
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks`;
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create transactions Table in BigQuery
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.transactions` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.transactions` (
     Transaction_Key STRING,
     SRC_TransactionID STRING,
     EncounterID STRING,
@@ -245,7 +276,7 @@ PARTITION BY VisitDate
 CLUSTER BY datasource, PayorID;
 
 -- 2. Create a quality_checks temp table
-CREATE OR REPLACE TABLE `avd-databricks-demo.silver_dataset.quality_checks` AS
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks` AS
 SELECT DISTINCT 
     CONCAT(TransactionID, '-', datasource) AS Transaction_Key,
     TransactionID AS SRC_TransactionID,
@@ -275,14 +306,14 @@ SELECT DISTINCT
         ELSE FALSE
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `avd-databricks-demo.bronze_dataset.transactions_ha`
+    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `avd-databricks-demo.bronze_dataset.transactions_hb`
+    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_hb`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
-MERGE INTO `avd-databricks-demo.silver_dataset.transactions` AS target
-USING `avd-databricks-demo.silver_dataset.quality_checks` AS source
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.transactions` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks` AS source
 ON target.Transaction_Key = source.Transaction_Key
 AND target.is_current = TRUE 
 
@@ -378,12 +409,12 @@ VALUES (
 );
 
 -- 4. DROP quality_check table
-DROP TABLE IF EXISTS `avd-databricks-demo.silver_dataset.quality_checks`;
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks`;
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create the encounters Table in BigQuery
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.encounters` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.encounters` (
     Encounter_Key STRING,
     SRC_EncounterID STRING,
     PatientID STRING,
@@ -392,6 +423,10 @@ CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.encounters` (
     EncounterDate DATE,
     EncounterType STRING,
     ProcedureCode INT64,
+    Admit_Source STRING,
+    Discharge_Disposition STRING,
+    DRG STRING,
+    Primary_Diagnosis_Code STRING,
     SRC_ModifiedDate INT64,
     datasource STRING,
     is_quarantined BOOL,
@@ -403,7 +438,7 @@ PARTITION BY EncounterDate
 CLUSTER BY datasource;
 
 -- 2. Create a quality_checks temp table for encounters
-CREATE OR REPLACE TABLE `avd-databricks-demo.silver_dataset.quality_checks_encounters` AS
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks_encounters` AS
 SELECT DISTINCT 
     CONCAT(SRC_EncounterID, '-', datasource) AS Encounter_Key,
     SRC_EncounterID,
@@ -413,6 +448,10 @@ SELECT DISTINCT
     SAFE.PARSE_DATE('%Y%m%d', CAST(EncounterDate AS STRING)) AS EncounterDate,
     EncounterType,
     ProcedureCode,
+    'Unknown' AS Admit_Source,
+    'Unknown' AS Discharge_Disposition,
+    'Unknown' AS DRG,
+    'Unknown' AS Primary_Diagnosis_Code,
     ModifiedDate AS SRC_ModifiedDate,
     datasource,
     CASE 
@@ -430,7 +469,7 @@ FROM (
         ProcedureCode,
         ModifiedDate,
         'hosa' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.encounters_ha`
+    FROM `carenet-rcm-data-platform.bronze_dataset.encounters_ha`
     
     UNION ALL
     
@@ -444,12 +483,12 @@ FROM (
         ProcedureCode,
         ModifiedDate,
         'hosb' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.encounters_hb`
+    FROM `carenet-rcm-data-platform.bronze_dataset.encounters_hb`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
-MERGE INTO `avd-databricks-demo.silver_dataset.encounters` AS target
-USING `avd-databricks-demo.silver_dataset.quality_checks_encounters` AS source
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.encounters` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks_encounters` AS source
 ON target.Encounter_Key = source.Encounter_Key
 AND target.is_current = TRUE 
 
@@ -462,6 +501,10 @@ WHEN MATCHED AND (
     target.EncounterDate <> source.EncounterDate OR
     target.EncounterType <> source.EncounterType OR
     target.ProcedureCode <> source.ProcedureCode OR
+    target.Admit_Source <> source.Admit_Source OR
+    target.Discharge_Disposition <> source.Discharge_Disposition OR
+    target.DRG <> source.DRG OR
+    target.Primary_Diagnosis_Code <> source.Primary_Diagnosis_Code OR
     target.SRC_ModifiedDate <> source.SRC_ModifiedDate OR
     target.datasource <> source.datasource OR
     target.is_quarantined <> source.is_quarantined
@@ -481,6 +524,10 @@ THEN INSERT (
     EncounterDate,
     EncounterType,
     ProcedureCode,
+    Admit_Source,
+    Discharge_Disposition,
+    DRG,
+    Primary_Diagnosis_Code,
     SRC_ModifiedDate,
     datasource,
     is_quarantined,
@@ -497,6 +544,10 @@ VALUES (
     source.EncounterDate,
     source.EncounterType,
     source.ProcedureCode,
+    source.Admit_Source,
+    source.Discharge_Disposition,
+    source.DRG,
+    source.Primary_Diagnosis_Code,
     source.SRC_ModifiedDate,
     source.datasource,
     source.is_quarantined,
@@ -506,12 +557,12 @@ VALUES (
 );
 
 -- 4. DROP quality_check table
-DROP TABLE IF EXISTS `avd-databricks-demo.silver_dataset.quality_checks_encounters`;
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks_encounters`;
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create the Claims Table in BigQuery
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.claims` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.claims` (
     Claim_Key STRING,
     SRC_ClaimID STRING,
     TransactionID STRING,
@@ -525,6 +576,9 @@ CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.claims` (
     ClaimAmount FLOAT64,
     PaidAmount FLOAT64,
     ClaimStatus STRING,
+    Claim_Type STRING,
+    Revenue_Code STRING,
+    Place_of_Service STRING,
     PayorType STRING,
     Deductible FLOAT64,
     Coinsurance FLOAT64,
@@ -541,7 +595,7 @@ PARTITION BY ServiceDate
 CLUSTER BY datasource, PayorID;
 
 -- 2. Create a quality_checks temp table for claims
-CREATE OR REPLACE TABLE `avd-databricks-demo.silver_dataset.quality_checks_claims` AS
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks_claims` AS
 SELECT 
     CONCAT(SRC_ClaimID, '-', datasource) AS Claim_Key,
     SRC_ClaimID,
@@ -556,6 +610,9 @@ SELECT
     SAFE_CAST(ClaimAmount AS FLOAT64) AS ClaimAmount,
     SAFE_CAST(PaidAmount AS FLOAT64) AS PaidAmount,
     ClaimStatus,
+    'Professional' AS Claim_Type,
+    'Unknown' AS Revenue_Code,
+    '11' AS Place_of_Service,
     PayorType,
     SAFE_CAST(Deductible AS FLOAT64) AS Deductible,
     SAFE_CAST(Coinsurance AS FLOAT64) AS Coinsurance,
@@ -588,12 +645,12 @@ FROM (
         InsertDate,
         ModifiedDate,
         'hosa' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.claims`
+    FROM `carenet-rcm-data-platform.bronze_dataset.claims`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
-MERGE INTO `avd-databricks-demo.silver_dataset.claims` AS target
-USING `avd-databricks-demo.silver_dataset.quality_checks_claims` AS source
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.claims` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks_claims` AS source
 ON target.Claim_Key = source.Claim_Key
 AND target.is_current = TRUE 
 
@@ -611,6 +668,9 @@ WHEN MATCHED AND (
     target.ClaimAmount <> source.ClaimAmount OR
     target.PaidAmount <> source.PaidAmount OR
     target.ClaimStatus <> source.ClaimStatus OR
+    target.Claim_Type <> source.Claim_Type OR
+    target.Revenue_Code <> source.Revenue_Code OR
+    target.Place_of_Service <> source.Place_of_Service OR
     target.PayorType <> source.PayorType OR
     target.Deductible <> source.Deductible OR
     target.Coinsurance <> source.Coinsurance OR
@@ -639,6 +699,9 @@ THEN INSERT (
     ClaimAmount,
     PaidAmount,
     ClaimStatus,
+    Claim_Type,
+    Revenue_Code,
+    Place_of_Service,
     PayorType,
     Deductible,
     Coinsurance,
@@ -665,6 +728,9 @@ VALUES (
     source.ClaimAmount,
     source.PaidAmount,
     source.ClaimStatus,
+    source.Claim_Type,
+    source.Revenue_Code,
+    source.Place_of_Service,
     source.PayorType,
     source.Deductible,
     source.Coinsurance,
@@ -679,12 +745,12 @@ VALUES (
 );
 
 -- 4. DROP quality_check table
-DROP TABLE IF EXISTS `avd-databricks-demo.silver_dataset.quality_checks_claims`;
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks_claims`;
 
 -------------------------------------------------------------------------------------------------------
 
 -- 1. Create the CPT Codes Silver Table in BigQuery
-CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.cpt_codes` (
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.cpt_codes` (
     CP_Code_Key STRING,
     procedure_code_category STRING,
     cpt_codes STRING,
@@ -699,7 +765,7 @@ CREATE TABLE IF NOT EXISTS `avd-databricks-demo.silver_dataset.cpt_codes` (
 CLUSTER BY code_status;
 
 -- 2. Create a quality_checks temp table for CP Codes
-CREATE OR REPLACE TABLE `avd-databricks-demo.silver_dataset.quality_checks_cpt_codes` AS
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks_cpt_codes` AS
 SELECT 
     CONCAT(cpt_codes, '-', datasource) AS CP_Code_Key,
     procedure_code_category,
@@ -719,12 +785,12 @@ FROM (
         procedure_code_descriptions,
         code_status,
         'hosa' AS datasource
-    FROM `avd-databricks-demo.bronze_dataset.cpt_codes`
+    FROM `carenet-rcm-data-platform.bronze_dataset.cpt_codes`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
-MERGE INTO `avd-databricks-demo.silver_dataset.cpt_codes` AS target
-USING `avd-databricks-demo.silver_dataset.quality_checks_cpt_codes` AS source
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.cpt_codes` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks_cpt_codes` AS source
 ON target.CP_Code_Key = source.CP_Code_Key
 AND target.is_current = TRUE 
 
@@ -769,4 +835,91 @@ VALUES (
 );
 
 -- 4. DROP quality_check table
-DROP TABLE IF EXISTS `avd-databricks-demo.silver_dataset.quality_checks_cpt_codes`;
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks_cpt_codes`;-------------------------------------------------------------------------------------------------------
+
+-- 1. Create the ICD Codes Silver Table in BigQuery
+CREATE TABLE IF NOT EXISTS `carenet-rcm-data-platform.silver_dataset.icd_codes` (
+    ICD_Code_Key STRING,
+    icd_code STRING,
+    icd_code_type STRING,
+    code_description STRING,
+    inserted_date TIMESTAMP,
+    updated_date TIMESTAMP,
+    is_current_flag BOOLEAN,
+    datasource STRING,
+    is_quarantined BOOLEAN,
+    modified_date TIMESTAMP
+)
+CLUSTER BY icd_code_type;
+
+-- 2. Create a quality_checks temp table for ICD Codes
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.silver_dataset.quality_checks_icd_codes` AS
+SELECT 
+    CONCAT(icd_code, '-', datasource) AS ICD_Code_Key,
+    icd_code,
+    icd_code_type,
+    code_description,
+    inserted_date,
+    updated_date,
+    is_current_flag,
+    datasource,
+    CASE 
+        WHEN icd_code IS NULL THEN TRUE
+        ELSE FALSE
+    END AS is_quarantined
+FROM (
+    SELECT 
+        icd_code,
+        icd_code_type,
+        code_description,
+        CAST(inserted_date AS TIMESTAMP) AS inserted_date,
+        CAST(updated_date AS TIMESTAMP) AS updated_date,
+        is_current_flag,
+        'who_api' AS datasource
+    FROM `carenet-rcm-data-platform.bronze_dataset.icd_codes`
+);
+
+-- 3. Apply SCD Type 2 Logic with MERGE
+MERGE INTO `carenet-rcm-data-platform.silver_dataset.icd_codes` AS target
+USING `carenet-rcm-data-platform.silver_dataset.quality_checks_icd_codes` AS source
+ON target.ICD_Code_Key = source.ICD_Code_Key
+AND target.is_current_flag = TRUE 
+
+WHEN MATCHED AND (
+    target.icd_code_type <> source.icd_code_type OR
+    target.code_description <> source.code_description OR
+    target.datasource <> source.datasource OR
+    target.is_quarantined <> source.is_quarantined
+)
+THEN UPDATE SET 
+    target.is_current_flag = FALSE,
+    target.modified_date = CURRENT_TIMESTAMP()
+
+WHEN NOT MATCHED 
+THEN INSERT (
+    ICD_Code_Key,
+    icd_code,
+    icd_code_type,
+    code_description,
+    inserted_date,
+    updated_date,
+    is_current_flag,
+    datasource,
+    is_quarantined,
+    modified_date
+)
+VALUES (
+    source.ICD_Code_Key,
+    source.icd_code,
+    source.icd_code_type,
+    source.code_description,
+    source.inserted_date,
+    source.updated_date,
+    source.is_current_flag,
+    source.datasource,
+    source.is_quarantined,
+    CURRENT_TIMESTAMP()
+);
+
+-- 4. DROP quality_check table
+DROP TABLE IF EXISTS `carenet-rcm-data-platform.silver_dataset.quality_checks_icd_codes`;

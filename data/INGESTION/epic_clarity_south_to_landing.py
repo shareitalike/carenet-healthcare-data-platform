@@ -18,11 +18,11 @@ storage_client = storage.Client()
 bq_client = bigquery.Client()
 
 # Initialize Spark Session
-spark = SparkSession.builder.appName("EpicClarityMySQLToLanding").getOrCreate()
+spark = SparkSession.builder.appName("EpicClaritySouthToLanding").getOrCreate()
 
 # Google Cloud Storage (GCS) Configuration
 GCS_BUCKET = args.bucket
-HOSPITAL_NAME = "epic-clarity"
+HOSPITAL_NAME = "epic-clarity-south"
 LANDING_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/"
 ARCHIVE_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/archive/"
 CONFIG_FILE_PATH = f"gs://{GCS_BUCKET}/configs/load_config.csv"
@@ -58,9 +58,9 @@ if secret_data:
 else:
     db_user, db_pass, db_host = "myuser", "mypass", "34.132.104.87"
 
-# MySQL Configuration
+# MySQL Configuration for Epic Clarity South Campus (Acquired Division)
 MYSQL_CONFIG = {
-    "url": f"jdbc:mysql://{db_host}:3306/epic_clarity_db?useSSL=false&allowPublicKeyRetrieval=true",
+    "url": f"jdbc:mysql://{db_host}:3306/epic_clarity_south_db?useSSL=false&allowPublicKeyRetrieval=true",
     "driver": "com.mysql.cj.jdbc.Driver",
     "user": db_user,
     "password": db_pass
@@ -68,7 +68,7 @@ MYSQL_CONFIG = {
 
 ##------------------------------------------------------------------------------------------------------------------##
 # Logging Mechanism
-log_entries = []  # Stores logs before writing to GCS
+log_entries = []
 
 def log_event(event_type, message, table=None):
     """Log an event and store it in the log list"""
@@ -79,20 +79,16 @@ def log_event(event_type, message, table=None):
         "table": table
     }
     log_entries.append(log_entry)
-    print(f"[{log_entry['timestamp']}] {event_type} - {message}")  # Print for visibility
+    print(f"[{log_entry['timestamp']}] {event_type} - {message}")
     
 def save_logs_to_gcs():
     """Save logs to a JSON file and upload to GCS"""
-    log_filename = f"pipeline_log_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+    log_filename = f"pipeline_log_south_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
     log_filepath = f"temp/pipeline_logs/{log_filename}"  
     
     json_data = json.dumps(log_entries, indent=4)
-
-    # Get GCS bucket
     bucket = storage_client.bucket(GCS_BUCKET)
     blob = bucket.blob(log_filepath)
-    
-    # Upload JSON data as a file
     blob.upload_from_string(json_data, content_type="application/json")
     print(f"✅ Logs successfully saved to GCS at gs://{GCS_BUCKET}/{log_filepath}")
 
@@ -106,10 +102,8 @@ def save_logs_to_bigquery():
             .mode("append") \
             .save()
         print("✅ Logs stored in BigQuery for future analysis")
-    
-##------------------------------------------------------------------------------------------------------------------##
 
-# Function to Move Existing Files to Archive
+# Move Existing Files to Archive
 def move_existing_files_to_archive(table):
     blobs = list(storage_client.bucket(GCS_BUCKET).list_blobs(prefix=f"landing/{HOSPITAL_NAME}/{table}/"))
     existing_files = [blob.name for blob in blobs if blob.name.endswith(".parquet")]
@@ -120,50 +114,38 @@ def move_existing_files_to_archive(table):
 
     for file in existing_files:
         source_blob = storage_client.bucket(GCS_BUCKET).blob(file)
-
-        # Extract Date from File Name (from folder structure like table_YYYYMMDD)
         folder_name = file.split("/")[-2]
         date_part = folder_name.split("_")[-1]
         
-        # If it's 8 digits YYYYMMDD
         if len(date_part) == 8 and date_part.isdigit():
             year, month, day = date_part[:4], date_part[4:6], date_part[6:8]
         else:
-            # Fallback
             year, month, day = date_part[-4:], date_part[2:4], date_part[:2]
 
-        # Move to Archive
         archive_path = f"landing/{HOSPITAL_NAME}/archive/{table}/{year}/{month}/{day}/{file.split('/')[-1]}"
         destination_blob = storage_client.bucket(GCS_BUCKET).blob(archive_path)
-
-        # Copy file to archive and delete original
         storage_client.bucket(GCS_BUCKET).copy_blob(source_blob, storage_client.bucket(GCS_BUCKET), destination_blob.name)
         source_blob.delete()
         log_event("INFO", f"Moved {file} to {archive_path}", table=table)
-        
-##------------------------------------------------------------------------------------------------------------------##
 
-# Function to Get Latest Watermark from BigQuery Audit Table
+# Get Latest Watermark from BigQuery Audit Table
 def get_latest_watermark(table_name):
     try:
         query = f"""
             SELECT MAX(load_timestamp) AS latest_timestamp
             FROM `{BQ_AUDIT_TABLE}`
-            WHERE tablename = '{table_name}' and data_source = "epic_clarity_db"
+            WHERE tablename = '{table_name}' and data_source = "epic_clarity_south_db"
         """
         query_job = bq_client.query(query)
         result = query_job.result()
         for row in result:
             return row.latest_timestamp if row.latest_timestamp else "1900-01-01 00:00:00"
     except Exception as e:
-        print(f"Error fetching watermark (table might not exist yet): {str(e)}")
+        print(f"Error fetching watermark: {str(e)}")
     return "1900-01-01 00:00:00"
-
-##------------------------------------------------------------------------------------------------------------------##
 
 # Schema Registry & Drift Handling
 def load_registered_schema(table_name):
-    """Loads the registered schema from GCS."""
     bucket = storage_client.bucket(GCS_BUCKET)
     blob = bucket.blob(f"registry/schemas/{table_name}.json")
     if not blob.exists():
@@ -172,13 +154,11 @@ def load_registered_schema(table_name):
     return StructType.fromJson(json.loads(schema_json))
 
 def save_registered_schema(table_name, schema):
-    """Saves the schema registry file in GCS."""
     bucket = storage_client.bucket(GCS_BUCKET)
     blob = bucket.blob(f"registry/schemas/{table_name}.json")
     blob.upload_from_string(json.dumps(schema.jsonValue()))
 
 def handle_schema_drift(table_name, jdbc_df):
-    """Compares incoming schema with registry and logs/handles drift."""
     try:
         registered_schema = load_registered_schema(table_name)
         if registered_schema is None:
@@ -207,12 +187,9 @@ def handle_schema_drift(table_name, jdbc_df):
         log_event("ERROR", f"Error during schema drift handling for {table_name}: {str(e)}", table=table_name)
         return jdbc_df
 
-##------------------------------------------------------------------------------------------------------------------##
-
 # Function to Extract Data from MySQL and Save to GCS
 def extract_and_save_to_landing(table, load_type, watermark_col):
     try:
-        # Use provided execution date or fetch watermark from BigQuery
         if args.execution_date:
             last_watermark = f"{args.execution_date} 00:00:00"
             log_event("INFO", f"Using parameter execution date watermark: {last_watermark}", table=table)
@@ -238,18 +215,16 @@ def extract_and_save_to_landing(table, load_type, watermark_col):
         # Run schema drift detection
         df = handle_schema_drift(table, df)
 
-        # Determine output path partitioned by run date (YYYYMMDD for chronological sorting)
+        # Partitioned Parquet output path
         run_day = args.execution_date.replace("-", "") if args.execution_date else datetime.datetime.today().strftime('%Y%m%d')
         PARQUET_DIR_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/{table}/{table}_{run_day}/"
 
-        # Use PySpark native distributed Parquet writer (eliminates driver OOM risk)
         df.write.format("parquet").mode("overwrite").save(PARQUET_DIR_PATH)
-
         log_event("SUCCESS", f"✅ Parquet files successfully written to {PARQUET_DIR_PATH}", table=table)
         
         # Insert Audit Entry
         audit_df = spark.createDataFrame([
-            ("epic_clarity_db", table, load_type, df.count(), datetime.datetime.now(), "SUCCESS")], 
+            ("epic_clarity_south_db", table, load_type, df.count(), datetime.datetime.now(), "SUCCESS")], 
             ["data_source", "tablename", "load_type", "record_count", "load_timestamp", "status"])
 
         (audit_df.write.format("bigquery")
@@ -262,19 +237,17 @@ def extract_and_save_to_landing(table, load_type, watermark_col):
 
     except Exception as e:
         log_event("ERROR", f"Error processing {table}: {str(e)}", table=table)
-##------------------------------------------------------------------------------------------------------------------##
 
-# Function to Read Config File from GCS
+# Read Config File from GCS
 def read_config_file():
     df = spark.read.csv(CONFIG_FILE_PATH, header=True)
     log_event("INFO", "✅ Successfully read the config file")
     return df
 
-# read config file
 config_df = read_config_file()
 
 for row in config_df.collect():
-    if row["is_active"] == '1' and row["datasource"] == "epic_clarity_db": 
+    if row["is_active"] == '1' and row["datasource"] == "epic_clarity_south_db": 
         db, src, table, load_type, watermark, _, targetpath = row
         move_existing_files_to_archive(table)
         extract_and_save_to_landing(table, load_type, watermark)
@@ -283,4 +256,4 @@ save_logs_to_gcs()
 try:
     save_logs_to_bigquery()
 except Exception as e:
-    print(f"Skipping log insertion to BigQuery (audit tables might not be ready): {str(e)}")
+    print(f"Skipping log insertion to BigQuery: {str(e)}")

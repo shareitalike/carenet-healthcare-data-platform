@@ -1,10 +1,6 @@
 --------------------------------------------------------------------------------------------------
--- ENTERPRISE HEALTHCARE BIGQUERY GOLD LAYER SUITE
+-- ENTERPRISE HEALTHCARE BIGQUERY GOLD LAYER SUITE (MULTI-INSTANCE EPIC CLARITY)
 -- 15 Specialized Curated Data Marts for Looker Studio, BI Teams & C-Suite Executives
---
--- Optimization: All tables utilize Partitioning and Clustering for sub-second BigQuery BI Engine
--- Refresh Strategy: Zero-downtime CREATE OR REPLACE TABLE (or TRUNCATE/INSERT in batch windows)
--- Security & Governance: Fully de-identified; compliant with HIPAA data minimization standards
 --------------------------------------------------------------------------------------------------
 
 -- ===============================================================================================
@@ -22,302 +18,327 @@ SELECT
     COUNT(DISTINCT c.Claim_Key) AS TotalClaimsSubmitted,
     COUNT(DISTINCT c.PatientID) AS UniquePatientsBilled,
     ROUND(SUM(c.ClaimAmount), 2) AS TotalBilledAmount,
-    ROUND(SUM(c.PaidAmount), 2) AS TotalPaidAmount,
-    ROUND(SUM(c.Deductible + c.Coinsurance + c.Copay), 2) AS TotalPatientResponsibility,
-    ROUND(SUM(CASE WHEN c.settlement_status = 'SETTLED_PAID_FULL' THEN c.PaidAmount ELSE 0 END), 2) AS TotalCleanSettledAmount,
-    ROUND(SUM(CASE WHEN c.settlement_status = 'DENIED' THEN c.ClaimAmount ELSE 0 END), 2) AS TotalDeniedAmount,
-    ROUND(SAFE_DIVIDE(SUM(c.PaidAmount), SUM(c.ClaimAmount)) * 100, 2) AS NetCollectionRatePercentage,
-    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN c.settlement_status = 'DENIED' THEN c.Claim_Key END), COUNT(DISTINCT c.Claim_Key)) * 100, 2) AS DenialRatePercentage
+    ROUND(SUM(c.PaidAmount), 2) AS TotalCollectedAmount,
+    ROUND(SUM(c.ClaimAmount - c.PaidAmount), 2) AS TotalOutstandingBalance,
+    ROUND(SAFE_DIVIDE(SUM(c.PaidAmount), SUM(c.ClaimAmount)) * 100, 2) AS NetCollectionRatePct,
+    ROUND(AVG(c.DaysToSettle), 1) AS AvgDaysToSettle,
+    COUNTIF(c.ClaimStatus = 'DENIED') AS DeniedClaimCount,
+    ROUND(SAFE_DIVIDE(COUNTIF(c.ClaimStatus = 'DENIED'), COUNT(c.Claim_Key)) * 100, 2) AS DenialRatePct
 FROM `carenet-rcm-data-platform.silver_dataset.claims` c
 WHERE c.is_current = TRUE AND c.is_quarantined = FALSE
 GROUP BY c.ServiceDate, c.datasource, c.PayorType;
 
--- 2. Provider Performance & Clean Claim Rate (Target: Chief Medical Officer, Department Chairs)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.provider_performance`
-CLUSTER BY Specialization, ProviderID AS
-SELECT 
-    pr.ProviderID,
-    pr.FirstName AS ProviderFirstName,
-    pr.LastName AS ProviderLastName,
-    pr.Specialization,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalEncounters,
-    COUNT(DISTINCT t.Transaction_Key) AS TotalTransactions,
-    COUNT(DISTINCT c.Claim_Key) AS TotalClaims,
-    ROUND(SUM(t.Amount), 2) AS TotalBilledAmount,
-    ROUND(SUM(t.PaidAmount), 2) AS TotalPaidAmount,
-    COUNT(DISTINCT CASE WHEN c.settlement_status = 'SETTLED_PAID_FULL' THEN c.Claim_Key END) AS ApprovedClaims,
-    COUNT(DISTINCT CASE WHEN c.settlement_status = 'DENIED' THEN c.Claim_Key END) AS DeniedClaims,
-    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN c.settlement_status = 'SETTLED_PAID_FULL' THEN c.Claim_Key END), NULLIF(COUNT(DISTINCT c.Claim_Key), 0)) * 100, 2) AS CleanClaimRate,
-    ROUND(AVG(DATE_DIFF(c.ClaimDate, c.ServiceDate, DAY)), 1) AS AvgDaysInAR,
-    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN c.ClaimStatus = 'Approved' THEN c.Claim_Key END), NULLIF(COUNT(DISTINCT c.Claim_Key), 0)) * 100, 2) AS ClaimApprovalRate
-FROM `carenet-rcm-data-platform.silver_dataset.providers` pr
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = e.ProviderID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = t.ProviderID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.claims` c 
-    ON t.SRC_TransactionID = c.TransactionID AND c.is_current = TRUE AND c.is_quarantined = FALSE
-WHERE pr.is_current = TRUE AND pr.is_quarantined = FALSE
-GROUP BY pr.ProviderID, pr.FirstName, pr.LastName, pr.Specialization;
-
--- 3. Claim Denials & EDI 835 CARC Root-Cause Audit (Target: Billing Operations, Revenue Integrity)
+-- 2. Claim Denials & Root-Cause Audit (Target: Revenue Recovery, Billing Compliance)
 CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.claim_denials_audit`
-PARTITION BY ClaimDate
-CLUSTER BY PayorID, carc_code AS
+PARTITION BY ServiceDate
+CLUSTER BY DenialReasonCode, PayorID AS
 SELECT 
-    c.ClaimDate,
+    c.ServiceDate,
+    c.datasource,
     c.PayorID,
-    c.PayorType,
-    c.carc_code,
-    CASE 
-        WHEN c.carc_code = '16' THEN 'Claim/Service lacks information (Missing Info)'
-        WHEN c.carc_code = '45' THEN 'Charge exceeds fee schedule / maximum allowance'
-        WHEN c.carc_code = '96' THEN 'Non-covered charge(s)'
-        WHEN c.carc_code = '97' THEN 'Benefit included in payment/allowance for another service'
-        WHEN c.carc_code = '27' THEN 'Expenses incurred after coverage terminated'
-        ELSE CONCAT('CARC Reason Code ', COALESCE(c.carc_code, 'Unknown'))
-    END AS DenialReasonDescription,
-    COUNT(DISTINCT c.Claim_Key) AS DeniedClaimsCount,
-    ROUND(SUM(c.ClaimAmount), 2) AS DeniedBilledAmount,
-    COUNT(DISTINCT c.PatientID) AS ImpactedPatientsCount,
-    COUNT(DISTINCT c.ProviderID) AS ImpactedProvidersCount
+    c.DenialReasonCode,
+    c.CARC_Description,
+    pr.Specialization AS BillingSpecialty,
+    COUNT(c.Claim_Key) AS DeniedCount,
+    ROUND(SUM(c.ClaimAmount), 2) AS LostRevenueAmount,
+    ROUND(AVG(c.ClaimAmount), 2) AS AvgClaimDenialSize
 FROM `carenet-rcm-data-platform.silver_dataset.claims` c
-WHERE c.settlement_status = 'DENIED' AND c.is_current = TRUE AND c.is_quarantined = FALSE
-GROUP BY c.ClaimDate, c.PayorID, c.PayorType, c.carc_code;
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.providers` pr
+    ON c.ProviderID = pr.SRC_ProviderID AND c.datasource = pr.datasource AND pr.is_current = TRUE
+WHERE c.ClaimStatus = 'DENIED' AND c.is_current = TRUE AND c.is_quarantined = FALSE
+GROUP BY c.ServiceDate, c.datasource, c.PayorID, c.DenialReasonCode, c.CARC_Description, pr.Specialization;
 
--- 4. Accounts Receivable (A/R) Aging Buckets (Target: Revenue Recovery, Billing Collections)
+-- 3. Days in A/R and Aging Buckets (Target: Director of Patient Financial Services)
 CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.days_in_ar_and_aging`
-CLUSTER BY PayorType, AgingBucket AS
+CLUSTER BY AgingBucket, PayorID AS
 SELECT 
-    c.PayorType,
+    c.Claim_Key,
+    c.SRC_ClaimID,
+    c.datasource,
     c.PayorID,
+    c.PayorType,
+    c.ServiceDate,
+    DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) AS DaysInAR,
     CASE 
-        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) BETWEEN 0 AND 30 THEN '0-30 Days (Current)'
-        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) BETWEEN 31 AND 60 THEN '31-60 Days'
-        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) BETWEEN 61 AND 90 THEN '61-90 Days'
-        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) BETWEEN 91 AND 120 THEN '91-120 Days'
-        ELSE '120+ Days (Severe Delinquency)'
+        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) <= 30 THEN '0-30 Days (Current)'
+        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) <= 60 THEN '31-60 Days (Aging)'
+        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) <= 90 THEN '61-90 Days (Delinquent)'
+        WHEN DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY) <= 120 THEN '91-120 Days (Severe)'
+        ELSE '120+ Days (Write-Off Risk)'
     END AS AgingBucket,
-    COUNT(DISTINCT c.Claim_Key) AS OutstandingClaimsCount,
-    ROUND(SUM(c.ClaimAmount - COALESCE(c.PaidAmount, 0)), 2) AS OutstandingARBalance,
-    ROUND(AVG(DATE_DIFF(CURRENT_DATE(), c.ServiceDate, DAY)), 1) AS AverageDaysOutstanding
+    ROUND(c.ClaimAmount, 2) AS BilledAmount,
+    ROUND(c.PaidAmount, 2) AS PaidAmount,
+    ROUND(c.ClaimAmount - c.PaidAmount, 2) AS UncollectedBalance
 FROM `carenet-rcm-data-platform.silver_dataset.claims` c
-WHERE c.settlement_status IN ('PENDING_ADJUDICATION', 'DENIED') AND c.is_current = TRUE AND c.is_quarantined = FALSE
-GROUP BY c.PayorType, c.PayorID, AgingBucket;
+WHERE c.ClaimStatus IN ('PENDING_ADJUDICATION', 'DENIED') 
+  AND c.is_current = TRUE 
+  AND c.is_quarantined = FALSE;
 
--- 5. Payer Contract & Reimbursement Scorecard (Target: Managed Care Contract Negotiators)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.payer_contract_scorecard`
+-- 4. Payer Performance & Settlement Scorecard (Target: Managed Care Contracting)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.payer_performance_scorecard`
 CLUSTER BY PayorID, PayorType AS
 SELECT 
     c.PayorID,
     c.PayorType,
-    COUNT(DISTINCT c.Claim_Key) AS TotalClaimsProcessed,
-    ROUND(SUM(c.ClaimAmount), 2) AS TotalSubmittedCharges,
-    ROUND(SUM(c.PaidAmount), 2) AS TotalReimbursedAmount,
-    ROUND(SAFE_DIVIDE(SUM(c.PaidAmount), SUM(c.ClaimAmount)) * 100, 2) AS RealizedReimbursementRate,
-    ROUND(AVG(DATE_DIFF(c.ClaimDate, c.ServiceDate, DAY)), 1) AS AvgAdjudicationTurnaroundDays,
-    COUNT(DISTINCT CASE WHEN c.settlement_status = 'DENIED' THEN c.Claim_Key END) AS TotalDenials,
-    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN c.settlement_status = 'DENIED' THEN c.Claim_Key END), COUNT(DISTINCT c.Claim_Key)) * 100, 2) AS PayerDenialRate
+    c.datasource,
+    COUNT(c.Claim_Key) AS TotalClaimsReceived,
+    ROUND(SUM(c.ClaimAmount), 2) AS TotalClaimedValue,
+    ROUND(SUM(c.PaidAmount), 2) AS TotalPaidValue,
+    ROUND(SAFE_DIVIDE(SUM(c.PaidAmount), SUM(c.ClaimAmount)) * 100, 2) AS ReimbursementYieldPct,
+    ROUND(AVG(c.DaysToSettle), 1) AS AvgTurnaroundDays,
+    COUNTIF(c.ClaimStatus = 'DENIED') AS DeniedCount,
+    ROUND(SAFE_DIVIDE(COUNTIF(c.ClaimStatus = 'DENIED'), COUNT(c.Claim_Key)) * 100, 2) AS DenialPct
 FROM `carenet-rcm-data-platform.silver_dataset.claims` c
 WHERE c.is_current = TRUE AND c.is_quarantined = FALSE
-GROUP BY c.PayorID, c.PayorType;
+GROUP BY c.PayorID, c.PayorType, c.datasource;
 
--- ===============================================================================================
--- PILLAR 2: HOSPITAL OPERATIONS & CAPACITY MANAGEMENT
--- ===============================================================================================
-
--- 6. Daily Encounter Volume & Throughput (Target: Chief Operating Officer, Hospital Directors)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.encounter_volume_and_throughput`
-PARTITION BY EncounterDate
-CLUSTER BY datasource, EncounterType AS
-SELECT 
-    SAFE.PARSE_DATE('%Y-%m-%d', e.EncounterDate) AS EncounterDate,
-    e.datasource,
-    e.EncounterType,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalEncounters,
-    COUNT(DISTINCT e.PatientID) AS UniquePatientsTreated,
-    COUNT(DISTINCT e.DepartmentID) AS ActiveDepartmentsCount,
-    COUNT(DISTINCT e.ProviderID) AS AttendingProvidersCount
-FROM `carenet-rcm-data-platform.silver_dataset.encounters` e
-WHERE e.is_current = TRUE AND e.is_quarantined = FALSE
-GROUP BY EncounterDate, e.datasource, e.EncounterType;
-
--- 7. Department Capacity & Revenue Utilization (Target: Operations & Resource Planners)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.department_capacity_utilization`
-CLUSTER BY Dept_Id, DepartmentName AS
-SELECT 
-    d.Dept_Id,
-    d.DepartmentName,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalDepartmentVisits,
-    COUNT(DISTINCT e.PatientID) AS DistinctPatientsServed,
-    COUNT(DISTINCT t.Transaction_Key) AS TotalServiceEvents,
-    ROUND(SUM(t.Amount), 2) AS TotalGrossCharges,
-    ROUND(SUM(t.PaidAmount), 2) AS TotalNetRevenue,
-    ROUND(SAFE_DIVIDE(SUM(t.PaidAmount), NULLIF(SUM(t.Amount), 0)) * 100, 2) AS DepartmentCollectionRate
-FROM `carenet-rcm-data-platform.silver_dataset.departments` d
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON d.Dept_Id = e.DepartmentID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON d.Dept_Id = t.DepartmentID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-WHERE d.is_current = TRUE AND d.is_quarantined = FALSE
-GROUP BY d.Dept_Id, d.DepartmentName;
-
--- 8. Length of Stay (LOS) & Discharge Dynamics (Target: Bed Management, Care Coordinators)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.length_of_stay_analysis`
-CLUSTER BY DepartmentID, EncounterType AS
-SELECT 
-    e.DepartmentID,
-    e.EncounterType,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalAdmissions,
-    -- Calculate LOS proxy using visit timestamps or encounter durations
-    ROUND(AVG(COALESCE(SAFE_CAST(SPLIT(e.Encounter_Key, "-")[SAFE_OFFSET(0)] AS INT64) % 7 + 1, 3.2)), 1) AS AverageLengthOfStayDays,
-    COUNT(DISTINCT e.PatientID) AS TotalPatientsTreated
-FROM `carenet-rcm-data-platform.silver_dataset.encounters` e
-WHERE e.is_current = TRUE AND e.is_quarantined = FALSE
-GROUP BY e.DepartmentID, e.EncounterType;
-
--- ===============================================================================================
--- PILLAR 3: CLINICAL QUALITY, READMISSION & PATIENT SAFETY
--- ===============================================================================================
-
--- 9. 30-Day Hospital Readmission Rate (Target: Quality Improvement Directors, CMS Auditors)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.readmission_30day_risk`
-PARTITION BY InitialEncounterDate
-CLUSTER BY DepartmentID AS
-WITH ordered_encounters AS (
-    SELECT 
-        PatientID,
-        Encounter_Key,
-        DepartmentID,
-        SAFE.PARSE_DATE('%Y-%m-%d', EncounterDate) AS InitialEncounterDate,
-        LEAD(SAFE.PARSE_DATE('%Y-%m-%d', EncounterDate)) OVER (
-            PARTITION BY PatientID ORDER BY SAFE.PARSE_DATE('%Y-%m-%d', EncounterDate)
-        ) AS NextEncounterDate
-    FROM `carenet-rcm-data-platform.silver_dataset.encounters`
-    WHERE is_current = TRUE AND is_quarantined = FALSE
-)
-SELECT 
-    InitialEncounterDate,
-    DepartmentID,
-    COUNT(DISTINCT Encounter_Key) AS TotalIndexAdmissions,
-    COUNT(DISTINCT CASE WHEN DATE_DIFF(NextEncounterDate, InitialEncounterDate, DAY) BETWEEN 1 AND 30 THEN Encounter_Key END) AS ReadmissionsWithin30Days,
-    ROUND(SAFE_DIVIDE(
-        COUNT(DISTINCT CASE WHEN DATE_DIFF(NextEncounterDate, InitialEncounterDate, DAY) BETWEEN 1 AND 30 THEN Encounter_Key END),
-        COUNT(DISTINCT Encounter_Key)
-    ) * 100, 2) AS ReadmissionRate30DayPercentage
-FROM ordered_encounters
-GROUP BY InitialEncounterDate, DepartmentID;
-
--- 10. Chronic Disease & High-Risk Patient Registry (Target: Population Health Directors)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.chronic_disease_cohort`
-CLUSTER BY PrimaryDiagnosisCode, Gender AS
-SELECT 
-    COALESCE(SPLIT(e.Encounter_Key, "-")[SAFE_OFFSET(0)], 'E11.9') AS PrimaryDiagnosisCode,
-    p.Gender,
-    COUNT(DISTINCT p.SRC_PatientID) AS TotalCohortPatients,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalEncounterCount,
-    ROUND(SUM(t.Amount), 2) AS TotalHealthcareSpend,
-    ROUND(AVG(t.Amount), 2) AS AvgSpendPerPatient
-FROM `carenet-rcm-data-platform.silver_dataset.patients` p
-INNER JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON p.SRC_PatientID = e.PatientID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON e.PatientID = t.PatientID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-WHERE p.is_current = TRUE AND p.is_quarantined = FALSE
-GROUP BY PrimaryDiagnosisCode, p.Gender;
-
--- 11. Clinical Procedure & Service Charge Intensity (Target: Clinical Documentation Improvement - CDI)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.clinical_procedure_utilization`
-CLUSTER BY DepartmentID, TransactionType AS
-SELECT 
-    t.DepartmentID,
-    t.TransactionType,
-    COUNT(DISTINCT t.Transaction_Key) AS TotalProcedureCount,
-    COUNT(DISTINCT t.PatientID) AS DistinctPatientsTreated,
-    ROUND(SUM(t.Amount), 2) AS TotalChargeVolume,
-    ROUND(AVG(t.Amount), 2) AS AverageChargePerProcedure,
-    ROUND(SUM(t.PaidAmount), 2) AS TotalCollectedRevenue
-FROM `carenet-rcm-data-platform.silver_dataset.transactions` t
-WHERE t.is_current = TRUE AND t.is_quarantined = FALSE
-GROUP BY t.DepartmentID, t.TransactionType;
-
--- ===============================================================================================
--- PILLAR 4: PHYSICIAN & SPECIALTY PRODUCTIVITY
--- ===============================================================================================
-
--- 12. Physician Workload & Billing Intensity (Target: Medical Staff Credentialing & Compensation)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.physician_workload_analytics`
-CLUSTER BY Specialization, ProviderID AS
-SELECT 
-    pr.ProviderID,
-    CONCAT(pr.FirstName, ' ', pr.LastName) AS ProviderFullName,
-    pr.Specialization,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalEncountersCompleted,
-    COUNT(DISTINCT e.PatientID) AS UniquePatientsManaged,
-    ROUND(SUM(t.Amount), 2) AS TotalGrossBilled,
-    ROUND(SAFE_DIVIDE(SUM(t.Amount), NULLIF(COUNT(DISTINCT e.Encounter_Key), 0)), 2) AS AvgChargePerEncounter,
-    ROUND(SAFE_DIVIDE(COUNT(DISTINCT e.Encounter_Key), NULLIF(COUNT(DISTINCT EXTRACT(DATE FROM e.inserted_date)), 0)), 1) AS AvgEncountersPerActiveDay
-FROM `carenet-rcm-data-platform.silver_dataset.providers` pr
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = e.ProviderID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = t.ProviderID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-WHERE pr.is_current = TRUE AND pr.is_quarantined = FALSE
-GROUP BY pr.ProviderID, ProviderFullName, pr.Specialization;
-
--- 13. Specialty Service-Line Profitability & Margin (Target: Strategy & Business Development)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.specialty_service_line_margin`
-CLUSTER BY Specialization AS
-SELECT 
-    pr.Specialization AS ServiceLine,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalServiceLineEncounters,
-    ROUND(SUM(t.Amount), 2) AS GrossBilledRevenue,
-    ROUND(SUM(t.PaidAmount), 2) AS NetRealizedRevenue,
-    ROUND(SUM(t.Amount) - SUM(t.PaidAmount), 2) AS UncollectedOrAdjustedAmount,
-    ROUND(SAFE_DIVIDE(SUM(t.PaidAmount), NULLIF(SUM(t.Amount), 0)) * 100, 2) AS ServiceLineRealizationRate
-FROM `carenet-rcm-data-platform.silver_dataset.providers` pr
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = e.ProviderID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON SPLIT(pr.ProviderID, "-")[SAFE_OFFSET(1)] = t.ProviderID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-WHERE pr.is_current = TRUE AND pr.is_quarantined = FALSE
-GROUP BY ServiceLine;
-
--- ===============================================================================================
--- PILLAR 5: PATIENT DEMOGRAPHICS, ACCESS & FINANCIAL RESPONSIBILITY
--- ===============================================================================================
-
--- 14. Patient Demographics & Geographic Access (Target: Community Health & Marketing)
-CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.patient_demographics_access`
-CLUSTER BY datasource, Gender AS
-SELECT 
-    p.datasource,
-    p.Gender,
-    p.Language,
-    COUNT(DISTINCT p.SRC_PatientID) AS PatientCount,
-    COUNT(DISTINCT e.Encounter_Key) AS TotalVisitsAcrossNetwork,
-    ROUND(SUM(t.Amount), 2) AS TotalHealthcareCharges
-FROM `carenet-rcm-data-platform.silver_dataset.patients` p
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e 
-    ON p.SRC_PatientID = e.PatientID AND e.is_current = TRUE AND e.is_quarantined = FALSE
-LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t 
-    ON p.SRC_PatientID = t.PatientID AND t.is_current = TRUE AND t.is_quarantined = FALSE
-WHERE p.is_current = TRUE AND p.is_quarantined = FALSE
-GROUP BY p.datasource, p.Gender, p.Language;
-
--- 15. Patient Financial Responsibility & Copay Realization (Target: Patient Financial Services)
+-- 5. Out-of-Pocket Patient Responsibility & Collections (Target: Patient Billing Manager)
 CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.patient_financial_responsibility`
 PARTITION BY ServiceDate
-CLUSTER BY PayorType AS
+CLUSTER BY PatientState AS
 SELECT 
-    c.ServiceDate,
-    c.PayorType,
-    COUNT(DISTINCT c.Claim_Key) AS TotalBilledEvents,
-    ROUND(SUM(c.Deductible), 2) AS TotalDeductibleOwed,
-    ROUND(SUM(c.Coinsurance), 2) AS TotalCoinsuranceOwed,
-    ROUND(SUM(c.Copay), 2) AS TotalCopayOwed,
-    ROUND(SUM(c.Deductible + c.Coinsurance + c.Copay), 2) AS TotalPatientOutofPocketResponsibility,
-    ROUND(AVG(c.Deductible + c.Coinsurance + c.Copay), 2) AS AveragePatientOutOfPocketPerClaim
+    t.ServiceDate,
+    t.datasource,
+    p.State AS PatientState,
+    COUNT(DISTINCT t.Transaction_Key) AS BilledChargeCount,
+    COUNT(DISTINCT t.PatientID) AS UniquePatientsCount,
+    ROUND(SUM(t.Copay), 2) AS ExpectedCopayTotal,
+    ROUND(SUM(t.Coinsurance), 2) AS ExpectedCoinsuranceTotal,
+    ROUND(SUM(t.Deductible), 2) AS ExpectedDeductibleTotal,
+    ROUND(SUM(t.Copay + t.Coinsurance + t.Deductible), 2) AS TotalPatientResponsibilityAmount,
+    ROUND(SUM(t.PaidAmount), 2) AS ActualPatientPaidAmount,
+    ROUND(SAFE_DIVIDE(SUM(t.PaidAmount), SUM(t.Copay + t.Coinsurance + t.Deductible)) * 100, 2) AS PatientCollectionEfficiencyPct
+FROM `carenet-rcm-data-platform.silver_dataset.transactions` t
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.patients` p
+    ON t.PatientID = p.SRC_PatientID AND t.datasource = p.datasource AND p.is_current = TRUE
+WHERE t.is_current = TRUE AND t.is_quarantined = FALSE
+GROUP BY t.ServiceDate, t.datasource, p.State;
+
+
+-- ===============================================================================================
+-- PILLAR 2: CLINICAL OPERATIONS & PATIENT JOURNEY
+-- ===============================================================================================
+
+-- 6. Inpatient Bed Utilization & Census (Target: Chief Operating Officer, Nurse Managers)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.inpatient_census_utilization`
+PARTITION BY EncounterDate
+CLUSTER BY DepartmentName, datasource AS
+SELECT 
+    e.EncounterDate,
+    e.datasource,
+    COALESCE(d.Name, 'General Medicine') AS DepartmentName,
+    COALESCE(d.Location, 'Main Tower') AS FacilityLocation,
+    COUNT(DISTINCT e.Encounter_Key) AS ActiveInpatientAdmissions,
+    ROUND(AVG(e.LengthOfStay), 1) AS AvgLengthOfStayDays,
+    MAX(e.LengthOfStay) AS MaxLengthOfStayDays,
+    COUNTIF(e.LengthOfStay > 7) AS LongStayOutliersCount
+FROM `carenet-rcm-data-platform.silver_dataset.encounters` e
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.departments` d
+    ON e.DepartmentID = d.SRC_DepartmentID AND e.datasource = d.datasource AND d.is_current = TRUE
+WHERE e.EncounterType = 'Inpatient' AND e.is_current = TRUE AND e.is_quarantined = FALSE
+GROUP BY e.EncounterDate, e.datasource, d.Name, d.Location;
+
+-- 7. 30-Day Readmission Risk & Penalties (Target: Chief Medical Officer, Quality Committee)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.thirty_day_readmission_risk`
+CLUSTER BY DischargeYearMonth, datasource AS
+WITH encounter_ranks AS (
+    SELECT 
+        Encounter_Key,
+        SRC_EncounterID,
+        PatientID,
+        EncounterDate,
+        DischargeDate,
+        EncounterType,
+        datasource,
+        FORMAT_DATE('%Y-%m', EncounterDate) AS DischargeYearMonth,
+        LAG(DischargeDate) OVER (PARTITION BY PatientID, datasource ORDER BY EncounterDate) AS PrevDischargeDate
+    FROM `carenet-rcm-data-platform.silver_dataset.encounters`
+    WHERE EncounterType = 'Inpatient' AND is_current = TRUE AND is_quarantined = FALSE
+)
+SELECT 
+    DischargeYearMonth,
+    datasource,
+    COUNT(DISTINCT Encounter_Key) AS TotalInpatientDischarges,
+    COUNTIF(DATE_DIFF(EncounterDate, PrevDischargeDate, DAY) <= 30) AS ReadmittedWithin30DaysCount,
+    ROUND(SAFE_DIVIDE(COUNTIF(DATE_DIFF(EncounterDate, PrevDischargeDate, DAY) <= 30), COUNT(DISTINCT Encounter_Key)) * 100, 2) AS ReadmissionRatePct
+FROM encounter_ranks
+GROUP BY DischargeYearMonth, datasource;
+
+-- 8. Emergency Department (ED) Throughput (Target: ED Medical Director)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.emergency_department_throughput`
+PARTITION BY EncounterDate
+CLUSTER BY datasource, DischargeDisposition AS
+SELECT 
+    e.EncounterDate,
+    e.datasource,
+    COUNT(e.Encounter_Key) AS TotalEDVisits,
+    COUNTIF(e.DischargeDisposition = 'HOME') AS DischargedHomeCount,
+    COUNTIF(e.DischargeDisposition = 'TRANSFER') AS TransferredCount,
+    COUNTIF(e.DischargeDisposition = 'ADMITTED') AS AdmittedToInpatientCount,
+    ROUND(SAFE_DIVIDE(COUNTIF(e.DischargeDisposition = 'ADMITTED'), COUNT(e.Encounter_Key)) * 100, 2) AS EDAdmissionConversionRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.encounters` e
+WHERE e.EncounterType = 'Emergency' AND e.is_current = TRUE AND e.is_quarantined = FALSE
+GROUP BY e.EncounterDate, e.datasource, e.DischargeDisposition;
+
+-- 9. Clinical Department Productivity & Workload (Target: Clinical Operations Director)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.department_clinical_productivity`
+PARTITION BY ServiceDate
+CLUSTER BY DepartmentName, datasource AS
+SELECT 
+    t.ServiceDate,
+    t.datasource,
+    d.Name AS DepartmentName,
+    d.Location AS ClinicLocation,
+    COUNT(DISTINCT t.Transaction_Key) AS TotalProceduresPerformed,
+    COUNT(DISTINCT t.ProviderID) AS ActivePhysiciansOnDuty,
+    ROUND(SUM(t.Amount), 2) AS TotalGrossChargesGenerated,
+    ROUND(SAFE_DIVIDE(SUM(t.Amount), COUNT(DISTINCT t.ProviderID)), 2) AS RevenuePerPhysician
+FROM `carenet-rcm-data-platform.silver_dataset.transactions` t
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.departments` d
+    ON t.DeptID = d.SRC_DepartmentID AND t.datasource = d.datasource AND d.is_current = TRUE
+WHERE t.is_current = TRUE AND t.is_quarantined = FALSE
+GROUP BY t.ServiceDate, t.datasource, d.Name, d.Location;
+
+-- 10. Patient Geographic Demographics & Health Equity (Target: Population Health, Outreach)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.patient_health_equity_demographics`
+CLUSTER BY State, Race, Gender AS
+SELECT 
+    p.State,
+    p.City,
+    p.ZipCode,
+    p.Gender,
+    p.Race,
+    p.MaritalStatus,
+    p.Language,
+    p.datasource,
+    COUNT(DISTINCT p.Patient_Key) AS UniquePatientPopulation,
+    ROUND(AVG(DATE_DIFF(CURRENT_DATE(), p.DOB, YEAR)), 1) AS AvgPatientAgeYears,
+    COUNT(DISTINCT e.Encounter_Key) AS TotalEncountersUtilized
+FROM `carenet-rcm-data-platform.silver_dataset.patients` p
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.encounters` e
+    ON p.SRC_PatientID = e.PatientID AND p.datasource = e.datasource AND e.is_current = TRUE
+WHERE p.is_current = TRUE AND p.is_quarantined = FALSE
+GROUP BY p.State, p.City, p.ZipCode, p.Gender, p.Race, p.MaritalStatus, p.Language, p.datasource;
+
+
+-- ===============================================================================================
+-- PILLAR 3: PHYSICIAN PRODUCTIVITY, QUALITY & VALUE-BASED CARE
+-- ===============================================================================================
+
+-- 11. Physician RVU & Clinical Productivity (Target: VP of Medical Affairs, Chief of Staff)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.physician_rvu_productivity`
+PARTITION BY ServiceDate
+CLUSTER BY ProviderSpecialty, ProviderNPI AS
+SELECT 
+    t.ServiceDate,
+    t.datasource,
+    pr.NPI AS ProviderNPI,
+    CONCAT(pr.FirstName, ' ', pr.LastName) AS ProviderFullName,
+    pr.Specialization AS ProviderSpecialty,
+    COUNT(DISTINCT t.Transaction_Key) AS BilledServiceCount,
+    COUNT(DISTINCT t.EncounterID) AS PatientEncounterCount,
+    ROUND(SUM(t.Amount), 2) AS TotalGrossChargesBilled,
+    ROUND(SUM(t.PaidAmount), 2) AS TotalRevenueCollected,
+    ROUND(SUM(CASE 
+        WHEN t.CPTCode IN ('99213', '99214') THEN 1.5
+        WHEN t.CPTCode IN ('99285', '99291') THEN 4.5
+        ELSE 1.0
+    END), 2) AS EstimatedWorkRVUs
+FROM `carenet-rcm-data-platform.silver_dataset.transactions` t
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.providers` pr
+    ON t.ProviderID = pr.SRC_ProviderID AND t.datasource = pr.datasource AND pr.is_current = TRUE
+WHERE t.is_current = TRUE AND t.is_quarantined = FALSE
+GROUP BY t.ServiceDate, t.datasource, pr.NPI, pr.FirstName, pr.LastName, pr.Specialization;
+
+-- 12. Top 50 High-Volume ICD-10 & CPT Clinical Service Lines (Target: Service Line Directors)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.service_line_procedure_analytics`
+CLUSTER BY CPTCode, ICD10_Diagnosis AS
+SELECT 
+    t.CPTCode,
+    t.ICD10_Diagnosis,
+    t.datasource,
+    COUNT(t.Transaction_Key) AS ProcedureFrequencyCount,
+    COUNT(DISTINCT t.PatientID) AS DistinctPatientsTreated,
+    ROUND(SUM(t.Amount), 2) AS TotalBilledCharges,
+    ROUND(SUM(t.PaidAmount), 2) AS TotalReimbursementPaid,
+    ROUND(AVG(t.Amount), 2) AS AvgChargePerProcedure,
+    ROUND(SAFE_DIVIDE(SUM(t.PaidAmount), SUM(t.Amount)) * 100, 2) AS RealizedReimbursementRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.transactions` t
+WHERE t.is_current = TRUE AND t.is_quarantined = FALSE
+GROUP BY t.CPTCode, t.ICD10_Diagnosis, t.datasource;
+
+-- 13. Physician Clean Claim Rate & Denial Accountability (Target: Billing Compliance Officer)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.physician_claim_denial_scorecard`
+CLUSTER BY ProviderNPI, Specialty AS
+SELECT 
+    pr.NPI AS ProviderNPI,
+    CONCAT(pr.FirstName, ' ', pr.LastName) AS ProviderFullName,
+    pr.Specialization AS Specialty,
+    c.datasource,
+    COUNT(c.Claim_Key) AS TotalClaimsSubmitted,
+    COUNTIF(c.ClaimStatus = 'SETTLED_PAID_FULL') AS CleanClaimsPaidFirstPass,
+    COUNTIF(c.ClaimStatus = 'DENIED') AS DeniedClaimsCount,
+    ROUND(SAFE_DIVIDE(COUNTIF(c.ClaimStatus = 'SETTLED_PAID_FULL'), COUNT(c.Claim_Key)) * 100, 2) AS CleanClaimRatePct,
+    ROUND(SAFE_DIVIDE(COUNTIF(c.ClaimStatus = 'DENIED'), COUNT(c.Claim_Key)) * 100, 2) AS DenialRatePct,
+    ROUND(SUM(CASE WHEN c.ClaimStatus = 'DENIED' THEN c.ClaimAmount ELSE 0 END), 2) AS TotalDeniedClaimDollars
 FROM `carenet-rcm-data-platform.silver_dataset.claims` c
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.providers` pr
+    ON c.ProviderID = pr.SRC_ProviderID AND c.datasource = pr.datasource AND pr.is_current = TRUE
 WHERE c.is_current = TRUE AND c.is_quarantined = FALSE
-GROUP BY c.ServiceDate, c.PayorType;
+GROUP BY pr.NPI, pr.FirstName, pr.LastName, pr.Specialization, c.datasource;
+
+-- 14. Data Quality Quarantine & Error Observability Mart (Target: Data Engineering Lead, DataOps)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.data_quality_pipeline_observability`
+PARTITION BY DATE(inserted_date)
+CLUSTER BY TableName, datasource AS
+SELECT 
+    'patients' AS TableName,
+    datasource,
+    DATE(inserted_date) AS ExecutionDate,
+    COUNT(Patient_Key) AS TotalIngestedRows,
+    COUNTIF(is_quarantined = TRUE) AS QuarantinedErrorRows,
+    ROUND(SAFE_DIVIDE(COUNTIF(is_quarantined = TRUE), COUNT(Patient_Key)) * 100, 2) AS ErrorRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.patients`
+GROUP BY datasource, ExecutionDate
+
+UNION ALL
+
+SELECT 
+    'encounters' AS TableName,
+    datasource,
+    DATE(inserted_date) AS ExecutionDate,
+    COUNT(Encounter_Key) AS TotalIngestedRows,
+    COUNTIF(is_quarantined = TRUE) AS QuarantinedErrorRows,
+    ROUND(SAFE_DIVIDE(COUNTIF(is_quarantined = TRUE), COUNT(Encounter_Key)) * 100, 2) AS ErrorRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.encounters`
+GROUP BY datasource, ExecutionDate
+
+UNION ALL
+
+SELECT 
+    'claims' AS TableName,
+    datasource,
+    DATE(inserted_date) AS ExecutionDate,
+    COUNT(Claim_Key) AS TotalIngestedRows,
+    COUNTIF(is_quarantined = TRUE) AS QuarantinedErrorRows,
+    ROUND(SAFE_DIVIDE(COUNTIF(is_quarantined = TRUE), COUNT(Claim_Key)) * 100, 2) AS ErrorRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.claims`
+GROUP BY datasource, ExecutionDate;
+
+-- 15. Cross-Campus M&A Standardization & Volume Tracking (Target: Health System Board)
+CREATE OR REPLACE TABLE `carenet-rcm-data-platform.gold_dataset.cross_campus_operational_benchmark`
+CLUSTER BY datasource, EncounterType AS
+SELECT 
+    e.datasource,
+    e.EncounterType,
+    COUNT(DISTINCT e.PatientID) AS UniquePatientsServed,
+    COUNT(DISTINCT e.Encounter_Key) AS TotalPatientVisits,
+    ROUND(AVG(e.LengthOfStay), 1) AS AvgLengthOfStay,
+    ROUND(SUM(t.Amount), 2) AS TotalGrossChargesBilled,
+    ROUND(SUM(t.PaidAmount), 2) AS TotalReimbursementCollected,
+    ROUND(SAFE_DIVIDE(SUM(t.PaidAmount), SUM(t.Amount)) * 100, 2) AS OverallCampusCollectionRatePct
+FROM `carenet-rcm-data-platform.silver_dataset.encounters` e
+LEFT JOIN `carenet-rcm-data-platform.silver_dataset.transactions` t
+    ON e.SRC_EncounterID = t.EncounterID AND e.datasource = t.datasource AND t.is_current = TRUE
+WHERE e.is_current = TRUE AND e.is_quarantined = FALSE
+GROUP BY e.datasource, e.EncounterType;

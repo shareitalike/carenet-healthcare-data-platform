@@ -15,8 +15,8 @@ REGION = "us-central1"
 CLUSTER_NAME = "carenet-dataproc-cluster-{{ ds_nodash }}"
 COMPOSER_BUCKET = Variable.get("gcs_bucket", "carenet-rcm-data-bucket")
 
-GCS_JOB_FILE_1 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/epic_clarity_to_landing.py"
-GCS_JOB_FILE_2 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/cerner_millennium_to_landing.py"
+GCS_JOB_FILE_1 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/epic_clarity_north_to_landing.py"
+GCS_JOB_FILE_2 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/epic_clarity_south_to_landing.py"
 GCS_JOB_FILE_3 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/claims.py"
 GCS_JOB_FILE_4 = f"gs://{COMPOSER_BUCKET}/data/INGESTION/cpt_codes.py"
 
@@ -113,10 +113,10 @@ ARGS = {
 with DAG(
     dag_id="pyspark_dag",
     schedule_interval=None,
-    description="Orchestrates ephemeral Dataproc cluster creation, parallel PySpark ingestion, and cluster termination",
+    description="Orchestrates ephemeral Dataproc cluster creation, parallel PySpark ingestion from North & South Epic Clarity instances, and cluster termination",
     default_args=ARGS,
     catchup=False,
-    tags=["dataproc", "pyspark", "ingestion", "production"]
+    tags=["dataproc", "pyspark", "ingestion", "epic-clarity", "production"]
 ) as dag:
     
     # Task 1: Create ephemeral cluster
@@ -130,14 +130,14 @@ with DAG(
 
     # Ingestion Tasks
     pyspark_task_1 = DataprocSubmitJobOperator(
-        task_id="extract_hospital_a", 
+        task_id="extract_epic_north", 
         job=PYSPARK_JOB_1, 
         region=REGION, 
         project_id=PROJECT_ID
     )
 
     pyspark_task_2 = DataprocSubmitJobOperator(
-        task_id="extract_hospital_b", 
+        task_id="extract_epic_south", 
         job=PYSPARK_JOB_2, 
         region=REGION, 
         project_id=PROJECT_ID

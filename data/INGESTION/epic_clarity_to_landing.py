@@ -238,15 +238,14 @@ def extract_and_save_to_landing(table, load_type, watermark_col):
         # Run schema drift detection
         df = handle_schema_drift(table, df)
 
-        # Determine output file name based on run date
-        run_day = args.execution_date.replace("-", "") if args.execution_date else datetime.datetime.today().strftime('%d%m%Y')
-        JSON_FILE_PATH = f"landing/{HOSPITAL_NAME}/{table}/{table}_{run_day}.json"
+        # Determine output path partitioned by run date (YYYYMMDD for chronological sorting)
+        run_day = args.execution_date.replace("-", "") if args.execution_date else datetime.datetime.today().strftime('%Y%m%d')
+        PARQUET_DIR_PATH = f"gs://{GCS_BUCKET}/landing/{HOSPITAL_NAME}/{table}/{table}_{run_day}/"
 
-        bucket = storage_client.bucket(GCS_BUCKET)
-        blob = bucket.blob(JSON_FILE_PATH)
-        blob.upload_from_string(df.toPandas().to_json(orient="records", lines=True), content_type="application/json")
+        # Use PySpark native distributed Parquet writer (eliminates driver OOM risk)
+        df.write.format("parquet").mode("overwrite").save(PARQUET_DIR_PATH)
 
-        log_event("SUCCESS", f"✅ JSON file successfully written to gs://{GCS_BUCKET}/{JSON_FILE_PATH}", table=table)
+        log_event("SUCCESS", f"✅ Parquet files successfully written to {PARQUET_DIR_PATH}", table=table)
         
         # Insert Audit Entry
         audit_df = spark.createDataFrame([

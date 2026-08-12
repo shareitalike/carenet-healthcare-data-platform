@@ -25,9 +25,9 @@ SELECT DISTINCT
         ELSE FALSE 
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_ha`
+    SELECT DISTINCT *, 'epic_clarity_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_hb`
+    SELECT DISTINCT *, 'cerner_millennium_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.departments_hb`
 );
 
 -------------------------------------------------------------------------------------------------------
@@ -69,9 +69,9 @@ SELECT DISTINCT
         ELSE FALSE 
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_ha`
+    SELECT DISTINCT *, 'epic_clarity_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_hb`
+    SELECT DISTINCT *, 'cerner_millennium_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.providers_hb`
 );
 
 -------------------------------------------------------------------------------------------------------
@@ -138,7 +138,7 @@ FROM (
         DOB,
         Address,
         ModifiedDate,
-        'hosa' AS datasource
+        'epic_clarity_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.patients_ha`
     
     UNION ALL
@@ -154,7 +154,7 @@ FROM (
         DOB,
         Address,
         ModifiedDate,
-        'hosb' AS datasource
+        'cerner_millennium_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.patients_hb`
 );
 
@@ -306,9 +306,9 @@ SELECT DISTINCT
         ELSE FALSE
     END AS is_quarantined
 FROM (
-    SELECT DISTINCT *, 'hosa' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_ha`
+    SELECT DISTINCT *, 'epic_clarity_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_ha`
     UNION ALL
-    SELECT DISTINCT *, 'hosb' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_hb`
+    SELECT DISTINCT *, 'cerner_millennium_db' AS datasource FROM `carenet-rcm-data-platform.bronze_dataset.transactions_hb`
 );
 
 -- 3. Apply SCD Type 2 Logic with MERGE
@@ -468,7 +468,7 @@ FROM (
         EncounterType,
         ProcedureCode,
         ModifiedDate,
-        'hosa' AS datasource
+        'epic_clarity_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.encounters_ha`
     
     UNION ALL
@@ -482,7 +482,7 @@ FROM (
         EncounterType,
         ProcedureCode,
         ModifiedDate,
-        'hosb' AS datasource
+        'cerner_millennium_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.encounters_hb`
 );
 
@@ -644,7 +644,7 @@ FROM (
         Copay,
         InsertDate,
         ModifiedDate,
-        'hosa' AS datasource
+        'epic_clarity_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.claims`
 );
 
@@ -784,7 +784,7 @@ FROM (
         cpt_codes,
         procedure_code_descriptions,
         code_status,
-        'hosa' AS datasource
+        'epic_clarity_db' AS datasource
     FROM `carenet-rcm-data-platform.bronze_dataset.cpt_codes`
 );
 

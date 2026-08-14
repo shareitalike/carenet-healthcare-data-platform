@@ -80,14 +80,14 @@ Epic EMR ──► [ MLLP Gateway ] ──► [ Pub/Sub Topics ] (ADT, Claims, O
 
 ## 4. Repository Structure
 
-* [workflows/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/workflows/): Production Apache Airflow DAGs for **GCP Cloud Composer** (`pyspark_dag.py` for ephemeral Dataproc lifecycle, `bq_dag.py` for BigQuery ELT sequence).
-* [local_airflow/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/local_airflow/): Local Airflow environment for local DAG development and validation.
-* [data/INGESTION/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/INGESTION/): PySpark batch extraction scripts (`epic_clarity_to_landing.py`, `cerner_millennium_to_landing.py`) and reference clinical code tables (ICD-10, CPT, NPI).
-* [data/BQ/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/BQ/): Production BigQuery SQL transformation scripts:
+* [`workflows/`](workflows/): Production Apache Airflow DAGs for **GCP Cloud Composer** (`pyspark_dag.py` for ephemeral Dataproc lifecycle, `bq_dag.py` for BigQuery ELT sequence).
+* [`local_airflow/`](local_airflow/): Local Airflow environment for local DAG development and validation.
+* [`data/INGESTION/`](data/INGESTION/): PySpark batch extraction scripts (`epic_clarity_to_landing.py`, `cerner_millennium_to_landing.py`) and reference clinical code tables (ICD-10, CPT, NPI).
+* [`data/BQ/`](data/BQ/): Production BigQuery SQL transformation scripts:
   * `bronze.sql`: External table definitions over GCS Parquet landing zones.
   * `silver.sql`: Data cleaning, quarantine routing, EDI 835 claim adjudication, and SCD Type 2 MERGE logic across 6 core entities.
   * `gold.sql`: Complete DDL and aggregation logic for all 15 Curated Gold Data Marts.
   * `streaming_views.sql`: Real-time streaming views for ED census.
-* [data/STREAMING/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/STREAMING/): Streaming event generator (`streaming_producer.py`) and consumers (`dataflow_streaming_consumer.py`, `pyspark_streaming_consumer.py`).
-* [infrastructure/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/infrastructure/): Terraform IaC configurations provisioning GCP resources (GCS, BigQuery, Pub/Sub, Service Accounts, IAM).
-* [data/configs/](file:///f:/pyspark_study/project_hospital/Project_hospital_Prod/data/configs/): Metadata-driven pipeline configuration files (`load_config.csv`).
+* [`data/STREAMING/`](data/STREAMING/): Streaming event generator (`streaming_producer.py`) and consumers (`dataflow_streaming_consumer.py`, `pyspark_streaming_consumer.py`).
+* [`infrastructure/`](infrastructure/): Terraform IaC configurations provisioning GCP resources (GCS, BigQuery, Pub/Sub, Service Accounts, IAM).
+* [`data/configs/`](data/configs/): Metadata-driven pipeline configuration files (`load_config.csv`).
